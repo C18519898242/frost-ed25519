@@ -174,6 +174,25 @@ Once the protocol has finished, the [`output`](pkg/frost/keygen/output.go) conta
   as well as the group key these define.
 - [`SecretKey`](pkg/eddsa/secret_share.go) is the party's share of the group's signing key.
 
+### Import an existing Ed25519 key
+
+Use `frost.SplitPrivateKey(rawScalar, participants)` with a canonical 32-byte Ed25519 signing scalar in little-endian order. For a 32-byte RFC 8032 seed, use `frost.SplitSeed(seed, participants)`. If you have a Go `ed25519.PrivateKey`, its `Seed()` method returns the seed.
+
+The split requires three distinct, nonzero party IDs. It returns serialized secret shares by ID and public data with the original Ed25519 public key and three Ristretto public shares. Run the split in a trusted import tool. Send each secret share only to its intended node over an authenticated, confidential channel. Distribute the same public shares to all three nodes.
+
+Each node can validate and load its own share locally:
+
+```go
+key, err := frost.ImportKey(selfID, secretShare, publicShares, originalPublicKey)
+if err != nil {
+    return err
+}
+
+signState, output, err := frost.NewSignState(key.Public.PartyIDs, key.SecretKey, key.Public, message, timeout)
+```
+
+Use the original wallet public key as `originalPublicKey`. The import verifies the local share and group public key, and checks the degree and public shares for degenerate configurations. The 3-of-3 threshold relies on the trusted import tool generating the sharing with independent random coefficients. The returned signing material has the same format as key generation. Anyone who retains the original seed or signing scalar can still sign independently.
+
 ### Sign
 
 

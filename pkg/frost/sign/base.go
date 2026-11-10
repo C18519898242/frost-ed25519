@@ -44,6 +44,14 @@ type (
 )
 
 func NewRound(partyIDs party.IDSlice, secret *eddsa.SecretShare, shares *eddsa.Public, message []byte) (state.Round, *Output, error) {
+	if len(partyIDs) <= int(shares.Threshold) {
+		return nil, nil, errors.New("base.NewRound: too few signers for the key threshold")
+	}
+	for i := 1; i < len(partyIDs); i++ {
+		if partyIDs[i-1] >= partyIDs[i] {
+			return nil, nil, errors.New("base.NewRound: signer IDs must be sorted and distinct")
+		}
+	}
 	if !partyIDs.Contains(secret.ID) {
 		return nil, nil, errors.New("base.NewRound: owner of SecretShare is not contained in partyIDs")
 	}
