@@ -44,11 +44,17 @@ type (
 )
 
 func NewRound(partyIDs party.IDSlice, secret *eddsa.SecretShare, shares *eddsa.Public, message []byte) (state.Round, *Output, error) {
+	if secret == nil || shares == nil || shares.GroupKey == nil {
+		return nil, nil, errors.New("base.NewRound: secret share and public key data are required")
+	}
 	if len(partyIDs) <= int(shares.Threshold) {
 		return nil, nil, errors.New("base.NewRound: too few signers for the key threshold")
 	}
-	for i := 1; i < len(partyIDs); i++ {
-		if partyIDs[i-1] >= partyIDs[i] {
+	for i, id := range partyIDs {
+		if id == 0 {
+			return nil, nil, errors.New("base.NewRound: id 0 is not valid")
+		}
+		if i > 0 && partyIDs[i-1] >= id {
 			return nil, nil, errors.New("base.NewRound: signer IDs must be sorted and distinct")
 		}
 	}
@@ -74,15 +80,15 @@ func NewRound(partyIDs party.IDSlice, secret *eddsa.SecretShare, shares *eddsa.P
 
 	// Setup parties
 	for _, id := range partyIDs {
-		var s signer
-		if id == 0 {
-			return nil, nil, errors.New("base.NewRound: id 0 is not valid")
-		}
 		originalShare := shares.Shares[id]
+		if originalShare == nil {
+			return nil, nil, fmt.Errorf("base.NewRound: no public share for party %d", id)
+		}
 		lagrange, err := id.Lagrange(partyIDs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("base.NewRound: %w", err)
 		}
+		var s signer
 		s.Public.ScalarMult(lagrange, originalShare)
 		round.Parties[id] = &s
 	}

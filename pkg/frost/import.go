@@ -22,10 +22,13 @@ type ImportPublic struct {
 	Shares   map[party.ID][]byte // Canonical Ristretto encodings of the public shares.
 }
 
-// SplitPrivateKey splits a canonical 32-byte little-endian Ed25519 signing
-// scalar into three serialized secret shares and their public import data.
+// SplitPrivateKey splits a signing scalar into three serialized secret shares
+// and their public import data. privateKey must be a canonical 32-byte
+// little-endian scalar reduced modulo the group order, as from Scalar.Bytes.
+// Use SplitSeed for an RFC 8032 seed.
 // Deliver each secret share only to its intended node over an authenticated,
-// confidential channel. The import tool has access to the complete key.
+// confidential channel. The trusted import tool holds the complete key and
+// all final signing shares. Discard temporary copies after verified delivery.
 func SplitPrivateKey(privateKey []byte, participants party.IDSlice) (map[party.ID][]byte, *ImportPublic, error) {
 	secret, err := ristretto.NewScalar().SetCanonicalBytes(privateKey)
 	if err != nil {
@@ -83,14 +86,15 @@ func splitImportScalar(secret *ristretto.Scalar, participants party.IDSlice) (ma
 }
 
 // ImportKey validates a node's serialized secret share against the three
-// public shares and the expected original Ed25519 public key. It returns the
-// same signing material as key generation for this node.
+// authenticated public shares and the independently verified original Ed25519
+// public key. It returns the same signing material as key generation for this node.
 func ImportKey(selfID party.ID, secretShare []byte, publicShares map[party.ID][]byte, expectedPublicKey ed25519.PublicKey) (*keygen.Output, error) {
 	if len(publicShares) != importPartyCount || selfID == 0 {
 		return nil, errors.New("frost import: exactly three participants and a nonzero local ID are required")
 	}
 	identity := ristretto.NewIdentityElement()
-	if len(expectedPublicKey) != ed25519.PublicKeySize || bytes.Equal(expectedPublicKey, identity.BytesEd25519()) {
+	var zeroPublicKey [ed25519.PublicKeySize]byte
+	if len(expectedPublicKey) != ed25519.PublicKeySize || bytes.Equal(expectedPublicKey, zeroPublicKey[:]) || bytes.Equal(expectedPublicKey, identity.BytesEd25519()) {
 		return nil, errors.New("frost import: invalid expected Ed25519 public key")
 	}
 	var secret eddsa.SecretShare

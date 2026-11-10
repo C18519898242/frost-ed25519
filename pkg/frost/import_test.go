@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha512"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 
 func TestImportKeySignsWithOriginalKey(t *testing.T) {
 	ids := party.IDSlice{1, 2, 3}
+	unsorted := party.IDSlice{3, 2, 1}
 	seed := bytes.Repeat([]byte{42}, ed25519.SeedSize)
 	expected := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	digest := sha512.Sum512(seed)
@@ -28,9 +30,9 @@ func TestImportKeySignsWithOriginalKey(t *testing.T) {
 		name  string
 		split func() (map[party.ID][]byte, *frost.ImportPublic, error)
 	}{
-		{"seed", func() (map[party.ID][]byte, *frost.ImportPublic, error) { return frost.SplitSeed(seed, ids) }},
+		{"seed", func() (map[party.ID][]byte, *frost.ImportPublic, error) { return frost.SplitSeed(seed, unsorted) }},
 		{"scalar", func() (map[party.ID][]byte, *frost.ImportPublic, error) {
-			return frost.SplitPrivateKey(scalar.Bytes(), ids)
+			return frost.SplitPrivateKey(scalar.Bytes(), unsorted)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,12 +47,6 @@ func TestImportKeySignsWithOriginalKey(t *testing.T) {
 				cfg, err := frost.ImportKey(id, shares[id], public.Shares, expected)
 				require.NoError(t, err)
 				require.Equal(t, expected, cfg.Public.GroupKey.ToEd25519())
-				if id == ids[0] {
-					_, _, err := frost.NewSignState(ids[:2], cfg.SecretKey, cfg.Public, message, 0)
-					require.Error(t, err)
-					_, _, err = frost.NewSignState(party.IDSlice{1, 1, 2}, cfg.SecretKey, cfg.Public, message, 0)
-					require.Error(t, err)
-				}
 				s, out, err := frost.NewSignState(ids, cfg.SecretKey, cfg.Public, message, 0)
 				require.NoError(t, err)
 				states = append(states, s)
@@ -58,7 +54,8 @@ func TestImportKeySignsWithOriginalKey(t *testing.T) {
 			}
 
 			var incoming [][]byte
-			for round := 0; round < 3; round++ {
+			// Emit the local nonce commitments, then process the two inbound rounds.
+			for step := 0; step < 3; step++ {
 				var outgoing [][]byte
 				for _, s := range states {
 					messages, err := helpers.PartyRoutine(incoming, s)
@@ -81,11 +78,36 @@ func TestImportKeyRejectsInvalidShares(t *testing.T) {
 	require.NoError(t, err)
 	_, err = frost.ImportKey(2, shares[1], public.Shares, public.GroupKey)
 	require.Error(t, err)
-	_, err = frost.ImportKey(1, shares[1], public.Shares, make(ed25519.PublicKey, ed25519.PublicKeySize))
+	_, err = frost.ImportKey(1, nil, public.Shares, public.GroupKey)
 	require.Error(t, err)
-	public.Shares[3] = []byte{1}
-	_, err = frost.ImportKey(1, shares[1], public.Shares, public.GroupKey)
-	require.Error(t, err)
+	identity := ristretto.NewIdentityElement().Bytes()
+	for _, points := range []map[party.ID][]byte{
+		nil,
+		{1: public.Shares[1], 2: public.Shares[2]},
+		{1: public.Shares[1], 2: public.Shares[2], 3: public.Shares[3], 4: identity},
+		{2: public.Shares[2], 3: public.Shares[3], 4: public.Shares[1]},
+		{1: public.Shares[1], 2: public.Shares[2], 3: {1}},
+		{1: public.Shares[1], 2: public.Shares[2], 3: identity},
+	} {
+		_, err := frost.ImportKey(1, shares[1], points, public.GroupKey)
+		require.Error(t, err)
+	}
+}
+
+func TestImportKeyRejectsInvalidExpectedPublicKey(t *testing.T) {
+	shares, public, err := frost.SplitSeed(make([]byte, ed25519.SeedSize), party.IDSlice{1, 2, 3})
+	require.NoError(t, err)
+	for _, invalid := range []ed25519.PublicKey{
+		nil,
+		make(ed25519.PublicKey, ed25519.PublicKeySize),
+		ristretto.NewIdentityElement().BytesEd25519(),
+	} {
+		_, err := frost.ImportKey(1, shares[1], public.Shares, invalid)
+		require.EqualError(t, err, "frost import: invalid expected Ed25519 public key")
+	}
+	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	_, err = frost.ImportKey(1, shares[1], public.Shares, other)
+	require.EqualError(t, err, "frost import: public key mismatch")
 }
 
 func TestImportKeyRejectsTwoOfThreeSharing(t *testing.T) {
@@ -140,6 +162,44 @@ func TestSplitPrivateKeyRejectsInvalidInput(t *testing.T) {
 		_, _, err := frost.SplitSeed(make([]byte, ed25519.SeedSize), invalid)
 		require.Error(t, err)
 	}
-	_, _, err := frost.SplitSeed(make([]byte, ed25519.PrivateKeySize), ids)
+	for _, size := range []int{0, 31, 33, ed25519.PrivateKeySize} {
+		_, _, err := frost.SplitSeed(make([]byte, size), ids)
+		require.Error(t, err)
+	}
+}
+
+func TestSplitPrivateKeyRequiresCanonicalScalar(t *testing.T) {
+	ids := party.IDSlice{1, 2, 3}
+	order, err := hex.DecodeString("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+	require.NoError(t, err)
+	_, _, err = frost.SplitPrivateKey(order, ids)
 	require.Error(t, err)
+	order[0]-- // l - 1 remains a valid scalar.
+	_, _, err = frost.SplitPrivateKey(order, ids)
+	require.NoError(t, err)
+}
+
+func TestNewSignStateRejectsInvalidRoster(t *testing.T) {
+	ids := party.IDSlice{1, 2, 3}
+	shares, public, err := frost.SplitSeed(make([]byte, ed25519.SeedSize), ids)
+	require.NoError(t, err)
+	cfg, err := frost.ImportKey(1, shares[1], public.Shares, public.GroupKey)
+	require.NoError(t, err)
+	for _, roster := range []party.IDSlice{nil, ids[:2], {1, 1, 2}, {2, 1, 3}, {1, 2, 4}, {0, 1, 2}} {
+		_, _, err := frost.NewSignState(roster, cfg.SecretKey, cfg.Public, nil, 0)
+		require.Error(t, err)
+	}
+}
+
+func TestNewSignStateRejectsMissingPublicShare(t *testing.T) {
+	ids := party.IDSlice{1, 2, 3}
+	shares, public, err := frost.SplitSeed(make([]byte, ed25519.SeedSize), ids)
+	require.NoError(t, err)
+	cfg, err := frost.ImportKey(1, shares[1], public.Shares, public.GroupKey)
+	require.NoError(t, err)
+	delete(cfg.Public.Shares, 3)
+	require.NotPanics(t, func() {
+		_, _, err := frost.NewSignState(ids, cfg.SecretKey, cfg.Public, nil, 0)
+		require.EqualError(t, err, "base.NewRound: no public share for party 3")
+	})
 }
