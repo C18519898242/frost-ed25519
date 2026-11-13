@@ -116,6 +116,11 @@ func (p *Exponent) Degree() party.Size {
 	return party.Size(len(p.coefficients)) - 1
 }
 
+// HasFullDegree reports whether the highest coefficient is nonzero.
+func (p *Exponent) HasFullDegree() bool {
+	return p.coefficients[len(p.coefficients)-1].Equal(ristretto.NewIdentityElement()) != 1
+}
+
 // Add performs coefficient-wise addition of the coefficients of p and q, and sets p to the resulting polynomial
 // Returns an error if the length of the coefficients are different
 func (p *Exponent) Add(q *Exponent) error {

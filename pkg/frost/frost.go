@@ -1,6 +1,7 @@
 package frost
 
 import (
+	"crypto/ed25519"
 	"time"
 
 	"github.com/taurusgroup/frost-ed25519/pkg/eddsa"
@@ -23,7 +24,23 @@ func NewKeygenState(selfID party.ID, partyIDs party.IDSlice, threshold party.Siz
 		return nil, nil, err
 	}
 
-	go func() {}()
+	return s, output, nil
+}
+
+// NewKeygenStateWithContribution starts a 3-of-3 DKG using one node's canonical,
+// nonzero 32-byte little-endian scalar. The scalar is copied into the round.
+// All nodes must agree on the expected aggregate Ed25519 public key and a unique,
+// nonempty session ID. Route messages over authenticated, confidential channels
+// bound to that session, with reliable broadcast for broadcast messages.
+func NewKeygenStateWithContribution(selfID party.ID, partyIDs party.IDSlice, contribution []byte, expectedPublicKey ed25519.PublicKey, sessionID []byte, timeout time.Duration) (*state.State, *keygen.Output, error) {
+	round, output, err := keygen.NewRoundWithContribution(selfID, partyIDs, contribution, expectedPublicKey, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	s, err := state.NewBaseState(round, timeout)
+	if err != nil {
+		return nil, nil, err
+	}
 	return s, output, nil
 }
 

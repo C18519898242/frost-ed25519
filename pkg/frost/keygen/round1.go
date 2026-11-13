@@ -4,23 +4,29 @@ import (
 	"errors"
 
 	"github.com/taurusgroup/frost-ed25519/pkg/messages"
+	"github.com/taurusgroup/frost-ed25519/pkg/ristretto"
 	"github.com/taurusgroup/frost-ed25519/pkg/state"
 )
 
 func (round *round1) ProcessMessage(msg *messages.Message) *state.Error {
-	// TODO we can use custom contexts to prevent replay attacks
-	ctx := make([]byte, 32)
 	from := msg.From
-
+	if msg.KeyGen1.Commitments.Degree() != round.Threshold {
+		return state.NewError(from, errors.New("unexpected commitment degree"))
+	}
 	public := msg.KeyGen1.Commitments.Constant()
-	if !msg.KeyGen1.Proof.Verify(from, public, ctx) {
+	if round.ExpectedKey != nil && public.Equal(ristretto.NewIdentityElement()) == 1 {
+		return state.NewError(from, errors.New("zero public contribution"))
+	}
+	if !msg.KeyGen1.Proof.Verify(from, public, round.ProofContext[:]) {
 		return state.NewError(from, errors.New("ZK Schnorr failed"))
 	}
 
 	round.Commitments[from] = msg.KeyGen1.Commitments
 
 	// Add the commitments to our own, so that we can interpolate the final polynomial
-	_ = round.CommitmentsSum.Add(msg.KeyGen1.Commitments)
+	if err := round.CommitmentsSum.Add(msg.KeyGen1.Commitments); err != nil {
+		return state.NewError(from, err)
+	}
 	return nil
 }
 

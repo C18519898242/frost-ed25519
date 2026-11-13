@@ -174,6 +174,21 @@ Once the protocol has finished, the [`output`](pkg/frost/keygen/output.go) conta
   as well as the group key these define.
 - [`SecretKey`](pkg/eddsa/secret_share.go) is the party's share of the group's signing key.
 
+### Generate a new key from local contributions (3-of-3)
+
+For a new 3-of-3 wallet backed by locally derived contributions, use
+`frost.NewKeygenStateWithContribution`. Each participant supplies its own
+canonical nonzero little-endian scalar and the same expected Ed25519 public
+key and unique session ID. The expected public key can be computed by adding
+the three public contribution points. Run the normal DKG message loop over
+authenticated, confidential, session-bound channels with reliable broadcast.
+DKG checks that the resulting public key matches the expected key before
+returning signing shares. Wallet applications handle mnemonic derivation and backup.
+
+All DKG participants must run the updated library. The Schnorr challenge now
+uses the transcript hash, which changes proof validation for the random DKG
+entry point as well.
+
 ### Import an existing Ed25519 key (3-of-3)
 
 Use `frost.SplitPrivateKey(rawScalar, participants)` with a canonical 32-byte little-endian signing scalar reduced modulo the Ed25519 group order, as produced by `ristretto.Scalar.Bytes()`. Use `frost.SplitSeed(seed, participants)` for a 32-byte RFC 8032 seed. For a Go `ed25519.PrivateKey`, use its `Seed()` method. The splitter rejects a degenerate random sharing before returning it. If it reports `generated invalid sharing`, call it again to draw fresh coefficients.

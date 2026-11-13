@@ -105,23 +105,24 @@ func (s *State) HandleMessage(msg *messages.Message) error {
 		return s.wrapError(errors.New("sender is not a party"), senderID)
 	}
 
-	// Check if we have already received a message from this party.
-	// exists should never be false, but you never know
-	if _, exists := s.receivedMessages[senderID]; exists {
-		return s.wrapError(errors.New("message from this party was already received"), senderID)
-	}
-
 	if !s.isAcceptedType(msg.Type) {
 		return s.wrapError(errors.New("message type is not accepted for this type of round"), senderID)
 	}
 
-	s.ackMessage()
-
 	if msg.Type == s.acceptedTypes[0] {
+		if _, exists := s.receivedMessages[senderID]; exists {
+			return s.wrapError(errors.New("message from this party was already received"), senderID)
+		}
 		s.receivedMessages[senderID] = msg
 	} else {
+		for _, queued := range s.queue {
+			if queued.From == senderID && queued.Type == msg.Type {
+				return s.wrapError(errors.New("message from this party was already queued"), senderID)
+			}
+		}
 		s.queue = append(s.queue, msg)
 	}
+	s.ackMessage()
 
 	return nil
 }
